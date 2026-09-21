@@ -784,9 +784,6 @@ fun ExportSongDialog(
     val exportUtil = LocalExportUtil.current
     val coroutineScope = rememberCoroutineScope()
 
-    var fileName by rememberSaveable(mediaMetadata.id) {
-        mutableStateOf(sanitizeFileName(mediaMetadata.title))
-    }
     var threads by rememberSaveable(mediaMetadata.id) { mutableIntStateOf(1) }
     var extensionName by remember(mediaMetadata.id) { mutableStateOf("m4a") }
     var isExporting by remember { mutableStateOf(false) }
@@ -796,23 +793,16 @@ fun ExportSongDialog(
         extensionName = exportUtil.suggestedExtension(mediaMetadata.id)
     }
 
-    val folderLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
-            if (treeUri != null && !isExporting) {
+    val saveLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/*")) { uri ->
+            if (uri != null && !isExporting) {
                 isExporting = true
                 progress = 0f
                 coroutineScope.launch {
-                    val fullName =
-                        if (fileName.endsWith(".$extensionName")) {
-                            fileName
-                        } else {
-                            "$fileName.$extensionName"
-                        }
                     exportUtil
                         .exportSong(
                             songId = mediaMetadata.id,
-                            fileName = fullName,
-                            treeUri = treeUri,
+                            outputUri = uri,
                             threads = threads,
                             onProgress = { progress = it },
                         )
@@ -846,21 +836,17 @@ fun ExportSongDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = !isExporting && fileName.isNotBlank(),
-                onClick = { folderLauncher.launch(null) },
+                enabled = !isExporting,
+                onClick = { saveLauncher.launch("") },
             ) {
-                Text(text = stringResource(R.string.song_export_choose_folder))
+                Text(text = stringResource(R.string.song_export_button))
             }
         },
         text = {
             Column {
-                OutlinedTextField(
-                    value = fileName,
-                    onValueChange = { fileName = it },
-                    label = { Text(stringResource(R.string.song_export_filename)) },
-                    singleLine = true,
-                    supportingText = { Text(stringResource(R.string.song_export_format_hint, extensionName)) },
-                    modifier = Modifier.fillMaxWidth(),
+                Text(
+                    text = stringResource(R.string.song_export_format_hint, extensionName),
+                    style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -892,11 +878,6 @@ fun ExportSongDialog(
             }
         },
     )
-}
-
-private fun sanitizeFileName(raw: String): String {
-    val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
-    return cleaned.ifBlank { "song" }
 }
 
 @Composable

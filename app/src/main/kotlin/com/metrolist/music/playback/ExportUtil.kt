@@ -5,11 +5,8 @@
 
 package com.metrolist.music.playback
 
-import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
-import android.os.Build
-import android.provider.DocumentsContract
 import androidx.media3.datasource.cache.Cache
 import com.metrolist.music.db.MusicDatabase
 import com.metrolist.music.di.DownloadCache
@@ -62,14 +59,13 @@ constructor(
     }
 
     /**
-     * Exports the cached song to [fileName] inside the folder identified by [treeUri]
-     * (a Storage Access Framework tree). [threads] parallel workers split the copy.
+     * Exports the cached song to a file identified by [outputUri] obtained via
+     * ACTION_CREATE_DOCUMENT. [threads] parallel workers split the copy.
      * Reports progress in [onProgress] between 0f and 1f.
      */
     suspend fun exportSong(
         songId: String,
-        fileName: String,
-        treeUri: Uri,
+        outputUri: Uri,
         threads: Int,
         onProgress: (Float) -> Unit,
     ): Result<Unit> = withContext(Dispatchers.IO) {
@@ -111,10 +107,7 @@ constructor(
                     }
                 }
 
-                val documentUri = createDocumentInTree(treeUri, "audio/*", fileName)
-                    ?: throw IOException("Unable to create the destination file")
-
-                context.contentResolver.openOutputStream(documentUri, "wt")?.use { output ->
+                context.contentResolver.openOutputStream(outputUri, "wt")?.use { output ->
                     tempFile.inputStream().use { input -> input.copyTo(output) }
                 } ?: throw IOException("Unable to open the destination file")
 
@@ -162,33 +155,6 @@ constructor(
                 }
             }
         }
-    }
-
-    private fun createDocumentInTree(treeUri: Uri, mimeType: String, displayName: String): Uri? {
-        val resolver = context.contentResolver
-        if (Build.VERSION.SDK_INT >= 37) {
-            // Android 17 changed createDocument to take the tree Uri directly.
-            return DocumentsContract.createDocument(resolver, treeUri, mimeType, displayName)
-        }
-        // Older Android versions expect the parent document id as a String, an overload
-        // that compileSdk 37 no longer exposes, so it is invoked reflectively.
-        return runCatching {
-            val createDocument =
-                DocumentsContract::class.java.getMethod(
-                    "createDocument",
-                    ContentResolver::class.java,
-                    String::class.java,
-                    String::class.java,
-                    String::class.java,
-                )
-            createDocument.invoke(
-                null,
-                resolver,
-                DocumentsContract.getTreeDocumentId(treeUri),
-                mimeType,
-                displayName,
-            ) as Uri
-        }.getOrNull()
     }
 
     private fun writeFully(channel: FileChannel, buffer: ByteBuffer, destination: Long) {

@@ -230,11 +230,10 @@
     <string name="export_option_share">Share</string>
     <string name="export_option_save">Save to Documents</string>
 
-    <string name="song_export_to_file">Export to file</string>
-    <string name="song_export_filename">File name</string>
+    <string name="song_export_to_file">Export song</string>
     <string name="song_export_format_hint">Format: %1$s (as downloaded)</string>
     <string name="song_export_threads">Threads</string>
-    <string name="song_export_choose_folder">Choose folder…</string>
+    <string name="song_export_button">Export</string>
     <string name="song_export_progress">Exporting… %1$d%%</string>
     <string name="song_exported">Song exported</string>
     <string name="song_export_failed">Export failed: %1$s</string>
