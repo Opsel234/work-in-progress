@@ -837,7 +837,11 @@ fun ExportSongDialog(
         confirmButton = {
             TextButton(
                 enabled = !isExporting,
-                onClick = { saveLauncher.launch("") },
+                onClick = {
+                    val safeName = mediaMetadata.title
+                        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+                    saveLauncher.launch("$safeName.$extensionName")
+                },
             ) {
                 Text(text = stringResource(R.string.song_export_button))
             }
