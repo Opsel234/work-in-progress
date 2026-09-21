@@ -79,6 +79,7 @@ import androidx.media3.exoplayer.offline.DownloadService
 import com.metrolist.music.LocalNavController
 import com.metrolist.music.LocalDatabase
 import com.metrolist.music.LocalDownloadUtil
+import com.metrolist.music.LocalExportUtil
 import com.metrolist.music.LocalListenTogetherManager
 import com.metrolist.music.LocalPlayerConnection
 import com.metrolist.music.R
@@ -157,6 +158,10 @@ fun PlayerMenu(
         mutableStateOf(false)
     }
 
+    var showExportDialog by rememberSaveable {
+        mutableStateOf(false)
+    }
+
     val listenTogetherManager = LocalListenTogetherManager.current
     val listenTogetherRoleState = listenTogetherManager?.role?.collectAsStateWithLifecycle(initialValue = com.metrolist.music.listentogether.RoomRole.NONE)
     val isListenTogetherGuest = listenTogetherRoleState?.value == com.metrolist.music.listentogether.RoomRole.GUEST
@@ -185,6 +190,12 @@ fun PlayerMenu(
         visible = showListenTogetherDialog,
         mediaMetadata = mediaMetadata,
         onDismiss = { showListenTogetherDialog = false },
+    )
+
+    ExportSongDialog(
+        mediaMetadata = mediaMetadata,
+        visible = showExportDialog,
+        onDismiss = { showExportDialog = false },
     )
 
     var showSelectArtistDialog by rememberSaveable {
@@ -521,70 +532,89 @@ fun PlayerMenu(
         item {
             Material3MenuGroup(
                 items =
-                    listOf(
-                        when (download?.state) {
-                            Download.STATE_COMPLETED -> {
+                    buildList {
+                        add(
+                            when (download?.state) {
+                                Download.STATE_COMPLETED -> {
+                                    Material3MenuItemData(
+                                        title = {
+                                            Text(
+                                                text = stringResource(R.string.remove_download),
+                                            )
+                                        },
+                                        icon = {
+                                            Icon(
+                                                painter = painterResource(R.drawable.offline),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(24.dp),
+                                            )
+                                        },
+                                        onClick = {
+                                            DownloadService.sendRemoveDownload(
+                                                context,
+                                                ExoDownloadService::class.java,
+                                                mediaMetadata.id,
+                                                false,
+                                            )
+                                        },
+                                    )
+                                }
+
+                                Download.STATE_QUEUED, Download.STATE_DOWNLOADING -> {
+                                    Material3MenuItemData(
+                                        title = { Text(text = stringResource(R.string.downloading)) },
+                                        icon = {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(24.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                        },
+                                        onClick = {
+                                            DownloadService.sendRemoveDownload(
+                                                context,
+                                                ExoDownloadService::class.java,
+                                                mediaMetadata.id,
+                                                false,
+                                            )
+                                        },
+                                    )
+                                }
+
+                                else -> {
+                                    Material3MenuItemData(
+                                        title = { Text(text = stringResource(R.string.action_download)) },
+                                        icon = {
+                                            Icon(
+                                                painter = painterResource(R.drawable.download),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(24.dp),
+                                            )
+                                        },
+                                        onClick = {
+                                            downloadUtil.download(mediaMetadata)
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                        if (download?.state == Download.STATE_COMPLETED) {
+                            add(
                                 Material3MenuItemData(
-                                    title = {
-                                        Text(
-                                            text = stringResource(R.string.remove_download),
-                                        )
-                                    },
+                                    title = { Text(text = stringResource(R.string.song_export_to_file)) },
                                     icon = {
                                         Icon(
-                                            painter = painterResource(R.drawable.offline),
+                                            painter = painterResource(R.drawable.share),
                                             contentDescription = null,
                                             modifier = Modifier.size(24.dp),
                                         )
                                     },
                                     onClick = {
-                                        DownloadService.sendRemoveDownload(
-                                            context,
-                                            ExoDownloadService::class.java,
-                                            mediaMetadata.id,
-                                            false,
-                                        )
+                                        showExportDialog = true
                                     },
-                                )
-                            }
-
-                            Download.STATE_QUEUED, Download.STATE_DOWNLOADING -> {
-                                Material3MenuItemData(
-                                    title = { Text(text = stringResource(R.string.downloading)) },
-                                    icon = {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(24.dp),
-                                            strokeWidth = 2.dp,
-                                        )
-                                    },
-                                    onClick = {
-                                        DownloadService.sendRemoveDownload(
-                                            context,
-                                            ExoDownloadService::class.java,
-                                            mediaMetadata.id,
-                                            false,
-                                        )
-                                    },
-                                )
-                            }
-
-                            else -> {
-                                Material3MenuItemData(
-                                    title = { Text(text = stringResource(R.string.action_download)) },
-                                    icon = {
-                                        Icon(
-                                            painter = painterResource(R.drawable.download),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(24.dp),
-                                        )
-                                    },
-                                    onClick = {
-                                        downloadUtil.download(mediaMetadata)
-                                    },
-                                )
-                            }
-                        },
-                    ),
+                                ),
+                            )
+                        }
+                    },
             )
         }
 
@@ -740,6 +770,133 @@ fun PlayerMenu(
             )
         }
     }
+}
+
+@Composable
+fun ExportSongDialog(
+    mediaMetadata: MediaMetadata?,
+    visible: Boolean,
+    onDismiss: () -> Unit,
+) {
+    if (!visible || mediaMetadata == null) return
+
+    val context = LocalContext.current
+    val exportUtil = LocalExportUtil.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var fileName by rememberSaveable(mediaMetadata.id) {
+        mutableStateOf(sanitizeFileName(mediaMetadata.title))
+    }
+    var threads by rememberSaveable(mediaMetadata.id) { mutableIntStateOf(1) }
+    var extensionName by remember(mediaMetadata.id) { mutableStateOf("m4a") }
+    var isExporting by remember { mutableStateOf(false) }
+    var progress by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(mediaMetadata.id) {
+        extensionName = exportUtil.suggestedExtension(mediaMetadata.id)
+    }
+
+    val folderLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+            if (treeUri != null && !isExporting) {
+                isExporting = true
+                progress = 0f
+                coroutineScope.launch {
+                    val fullName =
+                        if (fileName.endsWith(".$extensionName")) {
+                            fileName
+                        } else {
+                            "$fileName.$extensionName"
+                        }
+                    exportUtil
+                        .exportSong(
+                            songId = mediaMetadata.id,
+                            fileName = fullName,
+                            treeUri = treeUri,
+                            threads = threads,
+                            onProgress = { progress = it },
+                        )
+                        .onSuccess {
+                            Toast.makeText(context, R.string.song_exported, Toast.LENGTH_SHORT).show()
+                            onDismiss()
+                        }
+                        .onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.song_export_failed, error.message ?: ""),
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    isExporting = false
+                }
+            }
+        }
+
+    AlertDialog(
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        onDismissRequest = { if (!isExporting) onDismiss() },
+        title = { Text(stringResource(R.string.song_export_to_file)) },
+        dismissButton = {
+            TextButton(
+                enabled = !isExporting,
+                onClick = onDismiss,
+            ) {
+                Text(text = stringResource(android.R.string.cancel))
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !isExporting && fileName.isNotBlank(),
+                onClick = { folderLauncher.launch(null) },
+            ) {
+                Text(text = stringResource(R.string.song_export_choose_folder))
+            }
+        },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = fileName,
+                    onValueChange = { fileName = it },
+                    label = { Text(stringResource(R.string.song_export_filename)) },
+                    singleLine = true,
+                    supportingText = { Text(stringResource(R.string.song_export_format_hint, extensionName)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.song_export_threads),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ValueAdjuster(
+                        icon = R.drawable.speed,
+                        currentValue = threads,
+                        values = (1..8).toList(),
+                        onValueUpdate = { threads = it },
+                        valueText = { it.toString() },
+                    )
+                }
+                if (isExporting) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.song_export_progress, (progress * 100).toInt()),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+    )
+}
+
+private fun sanitizeFileName(raw: String): String {
+    val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
+    return cleaned.ifBlank { "song" }
 }
 
 @Composable

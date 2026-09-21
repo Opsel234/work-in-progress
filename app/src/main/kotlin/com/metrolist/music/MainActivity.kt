@@ -175,6 +175,7 @@ import com.metrolist.music.extensions.toEnum
 import com.metrolist.music.lyrics.LyricsProviderRegistry
 import com.metrolist.music.models.toMediaMetadata
 import com.metrolist.music.playback.DownloadUtil
+import com.metrolist.music.playback.ExportUtil
 import com.metrolist.music.playback.MusicService
 import com.metrolist.music.playback.MusicService.MusicBinder
 import com.metrolist.music.playback.PlayerConnection
@@ -254,6 +255,9 @@ class MainActivity : FragmentActivity() {
 
     @Inject
     lateinit var downloadUtil: DownloadUtil
+
+    @Inject
+    lateinit var exportUtil: ExportUtil
 
     @Inject
     lateinit var syncUtils: SyncUtils
@@ -479,6 +483,7 @@ class MainActivity : FragmentActivity() {
                 playerConnection = playerConnectionSnapshot,
                 database = database,
                 downloadUtil = downloadUtil,
+                exportUtil = exportUtil,
                 syncUtils = syncUtils,
             )
         }
@@ -493,6 +498,7 @@ class MainActivity : FragmentActivity() {
         playerConnection: PlayerConnection?,
         database: MusicDatabase,
         downloadUtil: DownloadUtil,
+        exportUtil: ExportUtil,
         syncUtils: SyncUtils,
     ) {
         val checkForUpdates by rememberPreference(CheckForUpdatesKey, defaultValue = true)
@@ -1044,6 +1050,7 @@ class MainActivity : FragmentActivity() {
                     LocalPlayerConnection provides playerConnection,
                     LocalPlayerAwareWindowInsets provides playerAwareWindowInsets,
                     LocalDownloadUtil provides downloadUtil,
+                    LocalExportUtil provides exportUtil,
                     LocalShimmerTheme provides ShimmerTheme,
                     LocalSyncUtils provides syncUtils,
                     LocalListenTogetherManager provides listenTogetherManager,
@@ -1724,6 +1731,7 @@ val LocalNavController = staticCompositionLocalOf<NavController> { error("No Nav
 val LocalPlayerConnection = staticCompositionLocalOf<PlayerConnection?> { error("No PlayerConnection provided") }
 val LocalPlayerAwareWindowInsets = compositionLocalOf<WindowInsets> { error("No WindowInsets provided") }
 val LocalDownloadUtil = staticCompositionLocalOf<DownloadUtil> { error("No DownloadUtil provided") }
+val LocalExportUtil = staticCompositionLocalOf<ExportUtil> { error("No ExportUtil provided") }
 val LocalSyncUtils = staticCompositionLocalOf<SyncUtils> { error("No SyncUtils provided") }
 val LocalListenTogetherManager = staticCompositionLocalOf<com.metrolist.music.listentogether.ListenTogetherManager?> { null }
 val LocalChangelogState = staticCompositionLocalOf<MutableState<Boolean>> { error("No LocalChangelogState provided") }
