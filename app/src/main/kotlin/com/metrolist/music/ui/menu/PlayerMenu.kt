@@ -38,6 +38,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -784,14 +786,21 @@ fun ExportSongDialog(
     val exportUtil = LocalExportUtil.current
     val coroutineScope = rememberCoroutineScope()
 
-    var threads by rememberSaveable(mediaMetadata.id) { mutableIntStateOf(1) }
-    var extensionName by remember(mediaMetadata.id) { mutableStateOf("m4a") }
+    var fileName by rememberSaveable(mediaMetadata.id) {
+        mutableStateOf(mediaMetadata.title)
+    }
+    var threads by rememberSaveable(mediaMetadata.id) { mutableIntStateOf(4) }
+    var qualityExpanded by remember { mutableStateOf(false) }
+    var selectedQuality by rememberSaveable(mediaMetadata.id) { mutableStateOf("balanced") }
     var isExporting by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(mediaMetadata.id) {
-        extensionName = exportUtil.suggestedExtension(mediaMetadata.id)
-    }
+    val qualityLabel =
+        when (selectedQuality) {
+            "low" -> stringResource(R.string.song_export_quality_low)
+            "high" -> stringResource(R.string.song_export_quality_high)
+            else -> stringResource(R.string.song_export_quality_balanced)
+        }
 
     val saveLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/*")) { uri ->
@@ -836,23 +845,47 @@ fun ExportSongDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = !isExporting,
+                enabled = !isExporting && fileName.isNotBlank(),
                 onClick = {
-                    val safeName = mediaMetadata.title
+                    val safeName = fileName
                         .replace(Regex("""[\\/:*?"<>|]"""), "_")
-                    saveLauncher.launch("$safeName.$extensionName")
+                    val ext = "webm"
+                    saveLauncher.launch("$safeName.$ext")
                 },
             ) {
                 Text(text = stringResource(R.string.song_export_button))
             }
         },
         text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.song_export_format_hint, extensionName),
-                    style = MaterialTheme.typography.bodyMedium,
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Name field
+                OutlinedTextField(
+                    value = fileName,
+                    onValueChange = { fileName = it },
+                    label = { Text(stringResource(R.string.song_export_name_label)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                 )
+
                 Spacer(modifier = Modifier.height(16.dp))
+
+                // Format row
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.song_export_format_label),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = stringResource(R.string.song_export_format_webm),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Threads row
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = stringResource(R.string.song_export_threads),
@@ -862,11 +895,57 @@ fun ExportSongDialog(
                     ValueAdjuster(
                         icon = R.drawable.speed,
                         currentValue = threads,
-                        values = (1..8).toList(),
+                        values = (1..32).toList(),
                         onValueUpdate = { threads = it },
                         valueText = { it.toString() },
                     )
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Quality row
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.song_export_quality_label),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box {
+                        TextButton(onClick = { qualityExpanded = true }) {
+                            Text(
+                                text = qualityLabel,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = qualityExpanded,
+                            onDismissRequest = { qualityExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.song_export_quality_low)) },
+                                onClick = {
+                                    selectedQuality = "low"
+                                    qualityExpanded = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.song_export_quality_balanced)) },
+                                onClick = {
+                                    selectedQuality = "balanced"
+                                    qualityExpanded = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.song_export_quality_high)) },
+                                onClick = {
+                                    selectedQuality = "high"
+                                    qualityExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+
                 if (isExporting) {
                     Spacer(modifier = Modifier.height(16.dp))
                     LinearProgressIndicator(

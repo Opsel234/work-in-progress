@@ -8,31 +8,46 @@ package com.metrolist.music.ui.menu
 import android.content.Intent
 import android.content.res.Configuration
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -41,11 +56,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadService
 import com.metrolist.innertube.YouTube
 import com.metrolist.music.LocalDatabase
 import com.metrolist.music.LocalDownloadUtil
+import com.metrolist.music.LocalExportUtil
 import com.metrolist.music.LocalListenTogetherManager
 import com.metrolist.music.LocalPlayerConnection
 import com.metrolist.music.R
@@ -72,6 +89,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.DecimalFormat
 import java.time.LocalDateTime
 
 @Composable
@@ -115,6 +133,7 @@ fun PlaylistMenu(
     val isPinned by database.speedDialDao.isPinned(playlist.id).collectAsStateWithLifecycle(initialValue = false)
 
     var showExportDialog by remember { mutableStateOf(false) }
+    var showAudioExportDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(songs) {
         if (songs.isEmpty()) return@LaunchedEffect
@@ -581,7 +600,7 @@ fun PlaylistMenu(
                                 },
                             )
                         }
-                        // Export playlist
+                        // Export playlist (CSV/M3U)
                         add(
                             Material3MenuItemData(
                                 title = { Text(text = stringResource(R.string.export_playlist)) },
@@ -592,6 +611,20 @@ fun PlaylistMenu(
                                     )
                                 },
                                 onClick = { showExportDialog = true },
+                            ),
+                        )
+                        // Export audio files
+                        add(
+                            Material3MenuItemData(
+                                title = { Text(text = stringResource(R.string.playlist_export_to_file)) },
+                                description = { Text(text = stringResource(R.string.playlist_export_subtitle)) },
+                                icon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.download),
+                                        contentDescription = null,
+                                    )
+                                },
+                                onClick = { showAudioExportDialog = true },
                             ),
                         )
                         if (autoPlaylist != true && !isGuest) {
@@ -713,4 +746,258 @@ fun PlaylistMenu(
             },
         )
     }
+
+    if (showAudioExportDialog) {
+        ExportPlaylistAudioDialog(
+            playlistName = playlist.playlist.name,
+            songs = songs,
+            visible = showAudioExportDialog,
+            onDismiss = { showAudioExportDialog = false },
+        )
+    }
+}
+
+@Composable
+fun ExportPlaylistAudioDialog(
+    playlistName: String,
+    songs: List<Song>,
+    visible: Boolean,
+    onDismiss: () -> Unit,
+) {
+    if (!visible) return
+
+    val context = LocalContext.current
+    val exportUtil = LocalExportUtil.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var threads by remember { mutableIntStateOf(4) }
+    var qualityExpanded by remember { mutableStateOf(false) }
+    var selectedQuality by remember { mutableStateOf("balanced") }
+    var isExporting by remember { mutableStateOf(false) }
+    var currentSongIndex by remember { mutableIntStateOf(0) }
+    var totalSongs by remember { mutableIntStateOf(0) }
+    var fileProgress by remember { mutableFloatStateOf(0f) }
+    var cachedCount by remember { mutableIntStateOf(0) }
+    var estimatedTotalBytes by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(songs) {
+        val cached = songs.filter { exportUtil.isCached(it.id) }
+        cachedCount = cached.size
+        var total = 0L
+        cached.forEach { song ->
+            total += exportUtil.estimatedSize(song.id)
+        }
+        estimatedTotalBytes = total
+    }
+
+    val qualityLabel =
+        when (selectedQuality) {
+            "low" -> stringResource(R.string.song_export_quality_low)
+            "high" -> stringResource(R.string.song_export_quality_high)
+            else -> stringResource(R.string.song_export_quality_balanced)
+        }
+
+    val estimatedSizeStr = formatFileSize(estimatedTotalBytes)
+
+    val folderLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+            if (treeUri != null && !isExporting) {
+                isExporting = true
+                currentSongIndex = 0
+                totalSongs = cachedCount
+                fileProgress = 0f
+                coroutineScope.launch {
+                    try {
+                        // Take persistable permission
+                        context.contentResolver.takePersistableUriPermission(
+                            treeUri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                        )
+                    } catch (_: Exception) { }
+
+                    // Export each cached song
+                    var exportedCount = 0
+                    val cachedSongs = songs.filter { exportUtil.isCached(it.id) }
+                    cachedSongs.forEachIndexed { index, song ->
+                        currentSongIndex = index + 1
+                        fileProgress = 0f
+
+                        val ext = exportUtil.suggestedExtension(song.id)
+                        val safeName = song.title.replace(Regex("""[\\/:*?"<>|]"""), "_")
+
+                        try {
+                            val docUri = android.provider.DocumentsContract.createDocument(
+                                context.contentResolver,
+                                treeUri,
+                                "audio/*",
+                                "$safeName.$ext",
+                            )
+                            if (docUri != null) {
+                                exportUtil.exportSong(
+                                    songId = song.id,
+                                    outputUri = docUri,
+                                    threads = threads,
+                                    onProgress = { fileProgress = it },
+                                ).getOrThrow()
+                                exportedCount++
+                            }
+                        } catch (_: Exception) { }
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        if (exportedCount > 0) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.playlist_exported, exportedCount),
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                R.string.playlist_export_no_downloads,
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                    isExporting = false
+                    onDismiss()
+                }
+            }
+        }
+
+    AlertDialog(
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        onDismissRequest = { if (!isExporting) onDismiss() },
+        title = { Text(stringResource(R.string.playlist_export_to_file)) },
+        dismissButton = {
+            TextButton(enabled = !isExporting, onClick = onDismiss) {
+                Text(text = stringResource(android.R.string.cancel))
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !isExporting && cachedCount > 0,
+                onClick = { folderLauncher.launch(null) },
+            ) {
+                Text(text = stringResource(R.string.song_export_button))
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Playlist info
+                Text(
+                    text = playlistName,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.playlist_export_songs_ready, cachedCount, songs.size),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (estimatedTotalBytes > 0) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(R.string.playlist_export_estimated_size, estimatedSizeStr),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Threads row
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.song_export_threads),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ValueAdjuster(
+                        icon = R.drawable.speed,
+                        currentValue = threads,
+                        values = (1..32).toList(),
+                        onValueUpdate = { threads = it },
+                        valueText = { it.toString() },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Quality row
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.song_export_quality_label),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box {
+                        TextButton(onClick = { qualityExpanded = true }) {
+                            Text(
+                                text = qualityLabel,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = qualityExpanded,
+                            onDismissRequest = { qualityExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.song_export_quality_low)) },
+                                onClick = {
+                                    selectedQuality = "low"
+                                    qualityExpanded = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.song_export_quality_balanced)) },
+                                onClick = {
+                                    selectedQuality = "balanced"
+                                    qualityExpanded = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.song_export_quality_high)) },
+                                onClick = {
+                                    selectedQuality = "high"
+                                    qualityExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+
+                if (isExporting) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.playlist_export_progress, currentSongIndex, totalSongs),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { fileProgress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${(fileProgress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+    )
+}
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB")
+    var value = bytes.toDouble()
+    var unitIndex = 0
+    while (value >= 1024 && unitIndex < units.size - 1) {
+        value /= 1024
+        unitIndex++
+    }
+    val df = DecimalFormat("#.##")
+    return "${df.format(value)} ${units[unitIndex]}"
 }

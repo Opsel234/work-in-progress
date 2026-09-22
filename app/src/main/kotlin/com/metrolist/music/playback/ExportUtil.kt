@@ -28,12 +28,12 @@ import javax.inject.Singleton
 import kotlin.math.min
 
 private const val EXPORT_BUFFER_SIZE = 64 * 1024
-private const val MAX_EXPORT_THREADS = 8
+private const val MAX_EXPORT_THREADS = 32
 
 /**
  * Copies fully downloaded songs out of the private Media3 download cache into a
- * user-chosen public folder. The cached fragments are concatenated in order into
- * a single file whose container matches what the servers actually delivered.
+ * user-chosen public folder. The output is always the original container format
+ * (typically WebM/Opus) without re-encoding.
  */
 @Singleton
 class ExportUtil
@@ -47,21 +47,29 @@ constructor(
     fun cachedLength(songId: String): Long =
         runCatching { downloadCache.getCachedLength(songId, 0, Long.MAX_VALUE) }.getOrDefault(0L)
 
-    /** Extension that reflects the container actually stored for a downloaded song. */
-    suspend fun suggestedExtension(songId: String): String = withContext(Dispatchers.IO) {
-        val mimeType = database.format(songId).first()?.mimeType?.lowercase().orEmpty()
-        when {
-            mimeType.contains("webm") -> "webm"
-            mimeType.contains("video/mp4") -> "mp4"
-            mimeType.contains("audio/mp4") || mimeType.contains("audio/mpeg") -> "m4a"
-            else -> "m4a"
+    /** Extension that reflects the container the server delivered. */
+    suspend fun suggestedExtension(songId: String): String {
+        val format = database.format(songId).first()
+        return when {
+            format?.mimeType?.contains("webm") == true -> "webm"
+            format?.mimeType?.contains("mp4") == true -> "m4a"
+            else -> "webm"
         }
+    }
+
+    /** Checks whether a song is fully downloaded and cached. */
+    fun isCached(songId: String): Boolean = cachedLength(songId) > 0L
+
+    /** Estimates the size in bytes of a song from its FormatEntity (may be 0 if unknown). */
+    suspend fun estimatedSize(songId: String): Long {
+        val format = database.format(songId).first()
+        return format?.contentLength?.takeIf { it > 0L } ?: cachedLength(songId)
     }
 
     /**
      * Exports the cached song to a file identified by [outputUri] obtained via
-     * ACTION_CREATE_DOCUMENT. [threads] parallel workers split the copy.
-     * Reports progress in [onProgress] between 0f and 1f.
+     * ACTION_CREATE_DOCUMENT. [threads] parallel workers split the initial cache
+     * read. Reports progress in [onProgress] between 0f and 1f.
      */
     suspend fun exportSong(
         songId: String,
@@ -118,6 +126,81 @@ constructor(
         }
     }
 
+    /**
+     * Returns the list of song IDs in a playlist, in order.
+     */
+    suspend fun playlistSongIds(playlistId: String): List<String> {
+        return database.playlistSongs(playlistId).first().map { it.song.id }
+    }
+
+    /**
+     * Returns the display name (title) of a song, or its ID as fallback.
+     */
+    suspend fun songTitle(songId: String): String {
+        return database.song(songId).first()?.title ?: songId
+    }
+
+    /**
+     * Exports all cached songs in a playlist to a folder chosen via
+     * ACTION_OPEN_DOCUMENT_TREE. [threads] controls parallelism per song.
+     * Reports progress via [onSongProgress] (songIndex, totalSongs, fileProgress).
+     * Returns the number of songs successfully exported.
+     */
+    suspend fun exportPlaylist(
+        playlistId: String,
+        folderUri: Uri,
+        threads: Int,
+        onSongProgress: (songIndex: Int, totalSongs: Int, fileProgress: Float) -> Unit,
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val songIds = playlistSongIds(playlistId)
+            require(songIds.isNotEmpty()) { "Playlist is empty" }
+
+            var exportedCount = 0
+            songIds.forEachIndexed { index, songId ->
+                onSongProgress(index + 1, songIds.size, 0f)
+
+                if (!isCached(songId)) {
+                    // Skip songs that aren't downloaded
+                    onSongProgress(index + 1, songIds.size, 1f)
+                    return@forEachIndexed
+                }
+
+                val title = songTitle(songId)
+                val ext = suggestedExtension(songId)
+                val safeName = title.replace(Regex("""[\\/:*?"<>|]"""), "_")
+
+                val fileUri = createFileInTree(folderUri, "$safeName.$ext", "audio/*")
+                    ?: throw IOException("Failed to create file: $safeName.$ext")
+
+                exportSong(
+                    songId = songId,
+                    outputUri = fileUri,
+                    threads = threads,
+                    onProgress = { onSongProgress(index + 1, songIds.size, it) },
+                ).getOrThrow()
+                exportedCount++
+            }
+            exportedCount
+        }
+    }
+
+    /**
+     * Creates a new file inside a DocumentsProvider tree identified by [treeUri].
+     */
+    private fun createFileInTree(treeUri: Uri, displayName: String, mimeType: String): Uri? {
+        return try {
+            android.provider.DocumentsContract.createDocument(
+                context.contentResolver,
+                treeUri,
+                mimeType,
+                displayName,
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private suspend fun copyCachedRange(
         songId: String,
         channel: FileChannel,
@@ -151,7 +234,8 @@ constructor(
                     writeFully(channel, ByteBuffer.wrap(buffer, 0, count), position)
                     position += count
                     remaining -= count
-                    onProgress(written.addAndGet(count.toLong()).toFloat() / total.toFloat())
+                    val fraction = written.addAndGet(count.toLong()).toFloat() / total.toFloat()
+                    onProgress(fraction)
                 }
             }
         }

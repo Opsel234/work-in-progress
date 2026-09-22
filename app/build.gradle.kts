@@ -311,6 +311,8 @@ dependencies {
     implementation(libs.protobuf.javalite)
     implementation(libs.protobuf.kotlin.lite)
 
+    implementation(libs.ffmpegKit.audio)
+
     coreLibraryDesugaring(libs.desugaring)
 
     implementation(libs.timber)

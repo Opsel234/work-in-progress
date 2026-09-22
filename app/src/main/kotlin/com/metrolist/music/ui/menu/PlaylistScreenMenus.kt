@@ -9,29 +9,47 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.media3.exoplayer.offline.Download
+import com.metrolist.music.LocalExportUtil
 import com.metrolist.music.LocalListenTogetherManager
 import com.metrolist.music.R
 import com.metrolist.music.db.entities.Playlist
@@ -43,7 +61,10 @@ import com.metrolist.music.ui.component.Material3MenuItemData
 import com.metrolist.music.utils.PlaylistExporter
 import com.metrolist.music.utils.getExportFileUri
 import com.metrolist.music.utils.saveToPublicDocuments
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.DecimalFormat
 
 /**
  * Menu for Local Playlist Screen
@@ -67,6 +88,7 @@ fun LocalPlaylistMenu(
     val localContext = LocalContext.current
 
     val (showExportDialog, setShowExportDialog) = remember { mutableStateOf(false) }
+    val (showAudioExportDialog, setShowAudioExportDialog) = remember { mutableStateOf(false) }
 
     val downloadMenuItem =
         when (downloadState) {
@@ -228,6 +250,21 @@ fun LocalPlaylistMenu(
                 ),
             )
 
+            // Export audio files
+            add(
+                Material3MenuItemData(
+                    title = { Text(stringResource(R.string.playlist_export_to_file)) },
+                    description = { Text(stringResource(R.string.playlist_export_subtitle)) },
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.download),
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = { setShowAudioExportDialog(true) },
+                ),
+            )
+
             add(
                 Material3MenuItemData(
                     title = { Text(stringResource(R.string.delete)) },
@@ -304,6 +341,15 @@ fun LocalPlaylistMenu(
                 }
                 onDismiss()
             },
+        )
+    }
+
+    if (showAudioExportDialog) {
+        ExportPlaylistAudioDialog(
+            playlistName = playlist.playlist.name,
+            songs = songs.map { it.song },
+            visible = showAudioExportDialog,
+            onDismiss = { setShowAudioExportDialog(false) },
         )
     }
 }
